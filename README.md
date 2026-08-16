@@ -18,9 +18,9 @@ Traditional weather apps mostly display raw numbers. WeatherVision converts raw 
 
 ## 🚀 Live Demo
 
-**[➡️ Open the live application](https://YOUR-DEPLOYED-URL.example)**
+**[➡️ Open the live application](https://hanbal07.github.io/weather-vision/)**
 
-> **Status:** The deployment URL is filled in once the application has been deployed and verified (see [Deployment](#deployment)). Until then the badge above is a placeholder — **no fake URLs are published**.
+> **Status:** Live and verified — served from GitHub Pages (`gh-pages` branch, zero-cost, no billing info required). The static build in [`site/`](site) replicates the full WeatherVision experience entirely in the browser: it calls **Open-Meteo directly** (CORS-enabled, no API key) and stores favorites/history in `localStorage`. The Flask web app in `web_app/` remains the backend version for local deployment (see [Deployment](#deployment)).
 
 ---
 
@@ -224,18 +224,31 @@ python -m pytest tests -q
 
 ## ☁️ Deployment
 
-The presentation layer is a **web application** (PySide6 cannot run on a cloud host), so deployment is a standard Python web deploy.
+The presentation layer is a **web application** (PySide6 cannot run on a cloud host). Two deployment paths are provided:
 
-### Platform choices
+### 1) GitHub Pages — the live demo (zero-cost, no billing)
+
+The **static site** in [`site/`](site) is already deployed to the `gh-pages` branch and is live at **[https://hanbal07.github.io/weather-vision/](https://hanbal07.github.io/weather-vision/)**. It needs no server:
+
+- `site/js/weather.js` is a client-side port of the Flask backend — it calls **Open-Meteo directly** (geocoding, forecast, air-quality; CORS-enabled, no API key) and reproduces the same scoring, activities, insights, alerts and unit conversion in the browser.
+- Favorites and search history use `localStorage` instead of SQLite.
+- To redeploy: commit changes under `site/`, push to `gh-pages`:
+  ```bash
+  git checkout gh-pages        # or build a scratch branch from site/
+  # copy site/* to the branch root, commit, push
+  ```
+  GitHub Pages then re-serves automatically.
+
+### 2) Flask backend (Render / Railway)
 
 | Platform | Config files | Why |
 |---|---|---|
 | **Render** | `render.yaml`, `runtime.txt` | Free web service, GitHub auto-deploy, HTTPS, `/health` checks, environment variables, logs, blueprints |
 | **Railway** | `nixpacks.toml`, `Procfile` | Python auto-detection, `$PORT`, GitHub deploys, volumes for persistent disk |
 
-Both are suitable. The repository ships ready-made configuration for **Render** (`render.yaml`) and **Railway/Nixpacks** (`nixpacks.toml`).
+> Note: Render now requires a card on file even for free web services; the static GitHub Pages route above is the no-billing alternative.
 
-### Steps (Render)
+#### Steps (Render)
 
 1. Push this repository to GitHub.
 2. In Render → **New → Web Service → Connect GitHub repository**.
@@ -244,7 +257,7 @@ Both are suitable. The repository ships ready-made configuration for **Render** 
 5. Deploy. Render runs `pip install -r requirements.txt` then `gunicorn wsgi:app --bind 0.0.0.0:$PORT …`.
 6. Open the generated `https://<service>.onrender.com` URL and verify `/health`.
 
-### Steps (Railway)
+#### Steps (Railway)
 
 1. Push this repository to GitHub.
 2. In Railway → **New Project → Deploy from GitHub repo**.
