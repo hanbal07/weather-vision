@@ -50,6 +50,8 @@ class ScoreResult:
     grade: str
     grade_label: str
     components: list[ScoreComponent] = field(default_factory=list)
+    factor_count: int = 6
+    available_factors: int = 6
 
 
 @dataclass
@@ -220,55 +222,84 @@ class IntelligenceEngine:
     # ------------------------------------------------------------------
     def comfort_score(self, weather: WeatherData) -> ScoreResult:
         cur = weather.current
+        candidates: list[tuple[str, float, float, str, str]] = []
+
+        # A factor is only scored when its measurement actually exists; the
+        # weights are then renormalized over the available factors (parity
+        # with the static-site data layer, which never invents values).
+        if cur.temperature is not None:
+            temp_score = _range_score(cur.temperature, 18, 24, 10, 30, 0, 40)
+            candidates.append((
+                "Temperature", round(temp_score), 0.30,
+                f"{cur.temperature:.0f}°C",
+                self._temperature_note(cur.temperature, temp_score),
+            ))
+
+        if cur.humidity is not None:
+            hum_score = _range_score(cur.humidity, 40, 60, 25, 75, 10, 90)
+            candidates.append((
+                "Humidity", round(hum_score), 0.20,
+                f"{cur.humidity}%",
+                self._humidity_note(cur.humidity, hum_score),
+            ))
+
+        if cur.wind_speed is not None:
+            wind_score = _range_score(cur.wind_speed, 0, 25, 45, 70, 90, 110)
+            candidates.append((
+                "Wind", round(wind_score), 0.15,
+                f"{cur.wind_speed:.0f} km/h",
+                self._wind_note(cur.wind_speed, wind_score),
+            ))
+
+        if cur.precipitation_probability is not None:
+            rain_value = _rain_score(cur.precipitation_probability)
+            candidates.append((
+                "Rain probability", round(rain_value), 0.15,
+                f"{cur.precipitation_probability}%",
+                self._rain_note(cur.precipitation_probability, rain_value),
+            ))
+
+        if cur.visibility_m is not None:
+            vis_km = cur.visibility_m / 1000.0
+            vis_score = _range_score(vis_km, 10, 40, 5, 6, 1, 2)
+            candidates.append((
+                "Visibility", round(vis_score), 0.10,
+                f"{vis_km:.1f} km",
+                self._visibility_note(vis_km, vis_score),
+            ))
+
+        if cur.uv_index is not None:
+            uv_score = self._uv_score(cur.uv_index, cur.is_day)
+            candidates.append((
+                "UV index", round(uv_score), 0.10,
+                self._uv_value_text(cur.uv_index, cur.is_day),
+                self._uv_note(cur.uv_index, cur.is_day, uv_score),
+            ))
+
+        available = len(candidates)
+        raw_weight = sum(c[2] for c in candidates)
+
         components: list[ScoreComponent] = []
+        for label, score, weight, value, note in candidates:
+            effective = (weight / raw_weight) if raw_weight else 0.0
+            components.append(ScoreComponent(
+                label, score, round(effective, 3), value, note,
+            ))
 
-        temp_score = _range_score(cur.temperature, 18, 24, 10, 30, 0, 40)
-        components.append(ScoreComponent(
-            "Temperature", round(temp_score), 0.30,
-            f"{cur.temperature:.0f}°C",
-            self._temperature_note(cur.temperature, temp_score),
-        ))
-
-        hum_score = _range_score(cur.humidity, 40, 60, 25, 75, 10, 90)
-        components.append(ScoreComponent(
-            "Humidity", round(hum_score), 0.20,
-            f"{cur.humidity}%",
-            self._humidity_note(cur.humidity, hum_score),
-        ))
-
-        wind_score = _range_score(cur.wind_speed, 0, 25, 45, 70, 90, 110)
-        components.append(ScoreComponent(
-            "Wind", round(wind_score), 0.15,
-            f"{cur.wind_speed:.0f} km/h",
-            self._wind_note(cur.wind_speed, wind_score),
-        ))
-
-        rain_value = _rain_score(cur.precipitation_probability)
-        components.append(ScoreComponent(
-            "Rain probability", round(rain_value), 0.15,
-            f"{cur.precipitation_probability}%",
-            self._rain_note(cur.precipitation_probability, rain_value),
-        ))
-
-        vis_km = cur.visibility_m / 1000.0
-        vis_score = _range_score(vis_km, 10, 40, 5, 6, 1, 2)
-        components.append(ScoreComponent(
-            "Visibility", round(vis_score), 0.10,
-            f"{vis_km:.1f} km",
-            self._visibility_note(vis_km, vis_score),
-        ))
-
-        uv_score = self._uv_score(cur.uv_index, cur.is_day)
-        components.append(ScoreComponent(
-            "UV index", round(uv_score), 0.10,
-            self._uv_value_text(cur.uv_index, cur.is_day),
-            self._uv_note(cur.uv_index, cur.is_day, uv_score),
-        ))
-
-        total = round(sum(c.weighted for c in components))
-        total = max(0, min(100, total))
+        if components:
+            total = round(sum(c.score * c.weight for c in components))
+            total = max(0, min(100, total))
+        else:
+            total = 0
         grade, label = self._grade(total)
-        return ScoreResult(total=total, grade=grade, grade_label=label, components=components)
+        return ScoreResult(
+            total=total,
+            grade=grade,
+            grade_label=label,
+            components=components,
+            factor_count=len(self.COMFORT_FACTORS),
+            available_factors=available,
+        )
 
     @staticmethod
     def _grade(score: int) -> tuple[str, str]:
@@ -370,12 +401,12 @@ class IntelligenceEngine:
     # "Why this forecast?" explanation
     # ------------------------------------------------------------------
     def why(self, weather: WeatherData) -> list[str]:
-        """Human-readable reasoning behind the comfort score."""
+        """Human-readable reasoning behind the comfort score (GUI/CLI form)."""
         result = self.comfort_score(weather)
         lines = [
             f"Weather Comfort Score = {result.total}/100 ({result.grade}).",
-            "The score is computed from six weather factors, each contributing "
-            "a weighted penalty:",
+            "The score is computed from the weather factors that are actually "
+            "available, each contributing a weighted penalty:",
         ]
         for comp in result.components:
             lines.append(
@@ -390,55 +421,140 @@ class IntelligenceEngine:
             lines.append("Conditions are poor for general outdoor activity. See the activity planner.")
         return lines
 
+    def why_structured(self, weather: WeatherData) -> list[dict[str, str]]:
+        """Structured ``[{title, body}]`` reasoning (mirrors the web payload)."""
+        result = self.comfort_score(weather)
+        lines: list[dict[str, str]] = []
+        lines.append({
+            "title": f"{result.total}/100 — {result.grade}",
+            "body": (
+                "The Weather Comfort Score weighs six measurements of the current conditions."
+                if result.available_factors == 6
+                else f"The Weather Comfort Score weighs the {result.available_factors} of six "
+                     "measurements that are currently available."
+            ),
+        })
+        for comp in result.components:
+            lines.append({
+                "title": f"{comp.label} — {comp.value}",
+                "body": f"{comp.note} Contribution {round(comp.weighted)}/"
+                        f"{round(comp.weight * 100)} of the score.",
+            })
+        if result.total >= 61:
+            lines.append({
+                "title": "Bottom line",
+                "body": "Overall the conditions are pleasant for most outdoor activities.",
+            })
+        elif result.total >= 41:
+            lines.append({
+                "title": "Bottom line",
+                "body": "Conditions are mixed — plan around the weakest factors listed above.",
+            })
+        else:
+            lines.append({
+                "title": "Bottom line",
+                "body": "Conditions are poor for general outdoor activity. See the activity planner.",
+            })
+        return lines
+
+    # ------------------------------------------------------------------
+    # One-line human summary (mirrors the static-site summarySentence)
+    # ------------------------------------------------------------------
+    def summary(self, weather: WeatherData) -> str:
+        cur = weather.current
+        parts: list[str] = []
+        if cur.condition_text and cur.condition_text != "Unknown":
+            parts.append(cur.condition_text)
+        elif cur.temperature is not None:
+            parts.append("Conditions are currently mixed")
+        if cur.temperature is not None:
+            parts.append(f"{cur.temperature:.0f}°")
+        if (cur.feels_like is not None and cur.temperature is not None
+                and abs(cur.feels_like - cur.temperature) >= 2):
+            parts.append(f"feels like {cur.feels_like:.0f}°")
+
+        sentence = " and ".join(parts) if parts else "Weather data is not available right now."
+        sentence = sentence.replace(" and feels", ", feels")
+
+        extras: list[str] = []
+        if cur.precipitation_probability is not None:
+            if cur.precipitation_probability >= 55:
+                extras.append(f"rain is likely ({cur.precipitation_probability}%)")
+            elif cur.precipitation_probability >= 35:
+                extras.append(f"a {cur.precipitation_probability}% chance of rain")
+        if cur.uv_index is not None and cur.is_day and cur.uv_index >= 8:
+            extras.append(f"UV index {cur.uv_index:.1f} — sun protection needed")
+        if cur.wind_speed is not None and cur.wind_speed >= 45:
+            extras.append(f"wind near {cur.wind_speed:.0f} km/h")
+        if extras:
+            if len(extras) == 1:
+                sentence += f" — {extras[0]}."
+            else:
+                sentence += f" — {'; '.join(extras)}."
+        else:
+            sentence += "."
+        return sentence
+
     # ------------------------------------------------------------------
     # Activity planner
     # ------------------------------------------------------------------
     def activity_scores(self, weather: WeatherData) -> list[ActivityResult]:
         cur = weather.current
-        vis_km = cur.visibility_m / 1000.0
         results: list[ActivityResult] = []
 
         for name, spec in self.ACTIVITY_SPECS.items():
-            factors: dict[str, float] = {}
+            factors: dict[str, float | None] = {}
 
-            temp_lo, temp_hi = spec["temp"]
-            factors["temperature"] = _range_score(
-                cur.temperature, temp_lo, temp_hi, temp_lo - 8, temp_hi + 8,
-                temp_lo - 16, temp_hi + 16,
-            )
-            factors["rain"] = _range_score(
-                cur.precipitation_probability, 0, spec["rain_max"],
-                spec["rain_max"], spec["rain_max"] + 30, spec["rain_max"] + 40,
-                spec["rain_max"] + 70,
-            )
-            factors["wind"] = _range_score(
-                cur.wind_speed, 0, spec["wind_max"],
-                spec["wind_max"], spec["wind_max"] + 25,
-                spec["wind_max"] + 40, spec["wind_max"] + 60,
-            )
-            hum_lo, hum_hi = spec["humidity"]
-            factors["humidity"] = _range_score(
-                cur.humidity, hum_lo, hum_hi, hum_lo - 15, hum_hi + 15,
-                hum_lo - 30, hum_hi + 30,
-            )
-            uv_score = self._uv_score(cur.uv_index, cur.is_day)
-            factors["uv"] = min(
-                uv_score,
-                _range_score(
-                    cur.uv_index if cur.uv_index is not None else 0,
-                    0, spec["uv_max"], spec["uv_max"], spec["uv_max"] + 3,
-                    spec["uv_max"] + 6, spec["uv_max"] + 9,
-                ),
-            )
-            factors["visibility"] = _range_score(
-                vis_km, spec["visibility_min"], 40,
-                spec["visibility_min"] - 2, 6, spec["visibility_min"] - 4, 2,
-            )
+            if cur.temperature is not None:
+                temp_lo, temp_hi = spec["temp"]
+                factors["temperature"] = _range_score(
+                    cur.temperature, temp_lo, temp_hi, temp_lo - 8, temp_hi + 8,
+                    temp_lo - 16, temp_hi + 16,
+                )
+            if cur.precipitation_probability is not None:
+                factors["rain"] = _range_score(
+                    cur.precipitation_probability, 0, spec["rain_max"],
+                    spec["rain_max"], spec["rain_max"] + 30, spec["rain_max"] + 40,
+                    spec["rain_max"] + 70,
+                )
+            if cur.wind_speed is not None:
+                factors["wind"] = _range_score(
+                    cur.wind_speed, 0, spec["wind_max"],
+                    spec["wind_max"], spec["wind_max"] + 25,
+                    spec["wind_max"] + 40, spec["wind_max"] + 60,
+                )
+            if cur.humidity is not None:
+                hum_lo, hum_hi = spec["humidity"]
+                factors["humidity"] = _range_score(
+                    cur.humidity, hum_lo, hum_hi, hum_lo - 15, hum_hi + 15,
+                    hum_lo - 30, hum_hi + 30,
+                )
+            if cur.uv_index is not None:
+                uv_score = self._uv_score(cur.uv_index, cur.is_day)
+                factors["uv"] = min(
+                    uv_score,
+                    _range_score(
+                        cur.uv_index,
+                        0, spec["uv_max"], spec["uv_max"], spec["uv_max"] + 3,
+                        spec["uv_max"] + 6, spec["uv_max"] + 9,
+                    ),
+                )
+            if cur.visibility_m is not None:
+                vis_km = cur.visibility_m / 1000.0
+                factors["visibility"] = _range_score(
+                    vis_km, spec["visibility_min"], 40,
+                    spec["visibility_min"] - 2, 6, spec["visibility_min"] - 4, 2,
+                )
 
-            total = round(
-                sum(factors[k] * self.ACTIVITY_WEIGHTS[k] for k in self.ACTIVITY_WEIGHTS)
-            )
-            total = max(0, min(100, total))
+            available = [k for k in self.ACTIVITY_WEIGHTS if factors.get(k) is not None]
+            weight_sum = sum(self.ACTIVITY_WEIGHTS[k] for k in available)
+            if available and weight_sum:
+                total = round(
+                    sum(factors[k] * (self.ACTIVITY_WEIGHTS[k] / weight_sum) for k in available)
+                )
+                total = max(0, min(100, total))
+            else:
+                total = 0
 
             label = self._activity_label(total)
             reasons = self._activity_reasons(name, factors, cur)
@@ -462,13 +578,13 @@ class IntelligenceEngine:
 
     @staticmethod
     def _activity_reasons(
-        name: str, factors: dict[str, float], cur: Any
+        name: str, factors: dict[str, float | None], cur: Any
     ) -> list[str]:
         """Explain the two biggest deductions for an activity."""
         penalties = [
             (label, score)
             for label, score in factors.items()
-            if score < 100
+            if score is not None and score < 100
         ]
         penalties.sort(key=lambda item: item[1])
         reasons = []
@@ -490,34 +606,38 @@ class IntelligenceEngine:
     # ------------------------------------------------------------------
     # Insights
     # ------------------------------------------------------------------
+    SEVERITY_RANK = {"INFO": 0, "LOW": 1, "MODERATE": 2, "HIGH": 3, "CRITICAL": 4}
+
     def insights(self, weather: WeatherData) -> list[Insight]:
         cur = weather.current
-        vis_km = cur.visibility_m / 1000.0
+        vis_km = cur.visibility_m / 1000.0 if cur.visibility_m is not None else None
         score = self.comfort_score(weather).total
         out: list[Insight] = []
 
         # Heat / cold
-        if cur.temperature >= 35:
-            out.append(Insight("🌡️", "Extreme heat",
-                               f"{cur.temperature:.0f}°C is very hot. Stay hydrated, seek shade and limit exertion.",
-                               "HIGH"))
-        elif cur.temperature >= 30:
-            out.append(Insight("🌡️", "Hot conditions",
-                               f"At {cur.temperature:.0f}°C it is hot. Plan outdoor time for cooler hours.",
-                               "MODERATE"))
-        elif cur.temperature <= -5:
-            out.append(Insight("🥶", "Bitter cold",
-                               f"{cur.temperature:.0f}°C - dress in layers and keep skin covered.",
-                               "HIGH"))
-        elif cur.temperature <= 5:
-            out.append(Insight("🥶", "Cold conditions",
-                               f"Only {cur.temperature:.0f}°C - warm clothing recommended.",
-                               "MODERATE"))
+        if cur.temperature is not None:
+            if cur.temperature >= 35:
+                out.append(Insight("🌡️", "Extreme heat",
+                                   f"{cur.temperature:.0f}°C is very hot — stay hydrated, seek shade and limit exertion.",
+                                   "HIGH"))
+            elif cur.temperature >= 30:
+                out.append(Insight("🌡️", "Hot conditions",
+                                   f"At {cur.temperature:.0f}°C it is hot — plan outdoor time for cooler hours.",
+                                   "MODERATE"))
+            elif cur.temperature <= -5:
+                out.append(Insight("🥶", "Bitter cold",
+                                   f"{cur.temperature:.0f}°C — dress in layers and keep skin covered.",
+                                   "HIGH"))
+            elif cur.temperature <= 5:
+                out.append(Insight("🥶", "Cold conditions",
+                                   f"Only {cur.temperature:.0f}°C — warm clothing recommended.",
+                                   "MODERATE"))
 
         # Humidity making it feel hotter
-        if cur.feels_like - cur.temperature >= 3:
-            out.append(Insight("💧", "Humidity makes it feel hotter",
-                               f"It feels like {cur.feels_like:.0f}°C due to {cur.humidity}% humidity.",
+        if (cur.feels_like is not None and cur.temperature is not None
+                and cur.feels_like - cur.temperature >= 3):
+            out.append(Insight("💧", "Feels hotter than it is",
+                               f"It feels like {cur.feels_like:.0f}°C — {cur.humidity}% humidity makes it muggy.",
                                "MODERATE"))
 
         # Rain
@@ -525,60 +645,65 @@ class IntelligenceEngine:
             out.append(Insight("⛈️", "Thunderstorm",
                                "Thunderstorm conditions detected. Avoid open areas and stay indoors.",
                                "CRITICAL"))
-        elif cur.precipitation_probability >= 80 or (
-            cur.condition_code in RAIN_CODES and cur.precipitation > 1.5
-        ):
-            out.append(Insight("🌧️", "Rain alert",
-                               f"Rain is very likely ({cur.precipitation_probability}%). Carry an umbrella.",
-                               "HIGH"))
-        elif cur.precipitation_probability >= 55:
-            out.append(Insight("☔", "Possible rain",
-                               f"Rain chance is {cur.precipitation_probability}% - consider an umbrella.",
-                               "MODERATE"))
-        elif cur.precipitation_probability >= 35:
-            out.append(Insight("🌦️", "Slight rain chance",
-                               f"A {cur.precipitation_probability}% chance of light rain exists.",
-                               "LOW"))
+        elif cur.precipitation_probability is not None:
+            if cur.precipitation_probability >= 80:
+                out.append(Insight("🌧️", "Rain is very likely",
+                                   f"Rain chance is {cur.precipitation_probability}% — carry an umbrella.",
+                                   "HIGH"))
+            elif cur.precipitation_probability >= 55:
+                out.append(Insight("☔", "Possible rain",
+                                   f"Rain chance is {cur.precipitation_probability}% — consider an umbrella.",
+                                   "MODERATE"))
+            elif cur.precipitation_probability >= 35:
+                out.append(Insight("🌦️", "Slight rain chance",
+                                   f"A {cur.precipitation_probability}% chance of rain exists today.",
+                                   "LOW"))
 
         if cur.condition_code in SNOW_CODES:
             out.append(Insight("❄️", "Snow conditions",
-                               "Snow is falling or forecast. Expect slippery surfaces.",
+                               "Snow is falling or forecast — expect slippery surfaces.",
                                "MODERATE"))
 
         # Wind
-        if cur.wind_speed >= 50:
-            out.append(Insight("🌬️", "Strong wind",
-                               f"Wind gusts may reach {cur.wind_gusts:.0f} km/h. Secure loose items.",
-                               "HIGH"))
-        elif cur.wind_speed >= 32:
-            out.append(Insight("🌬️", "Breezy",
-                               f"{cur.wind_speed:.0f} km/h wind - noticeable during outdoor activity.",
-                               "LOW"))
+        if cur.wind_speed is not None:
+            if cur.wind_speed >= 50:
+                gusts = (
+                    f", gusts to {cur.wind_gusts:.0f} km/h"
+                    if cur.wind_gusts is not None else ""
+                )
+                out.append(Insight("🌬️", "Strong wind",
+                                   f"Wind near {cur.wind_speed:.0f} km/h{gusts} — secure loose items.",
+                                   "HIGH"))
+            elif cur.wind_speed >= 32:
+                out.append(Insight("🌬️", "Breezy",
+                                   f"{cur.wind_speed:.0f} km/h wind — noticeable during outdoor activity.",
+                                   "LOW"))
 
         # UV
         if cur.uv_index is not None and cur.is_day:
             if cur.uv_index >= 11:
                 out.append(Insight("☀️", "Extreme UV",
-                                   f"UV index {cur.uv_index:.1f} - avoid the sun between 11:00-15:00.",
+                                   f"UV index {cur.uv_index:.1f} — avoid the sun between 11:00-15:00.",
                                    "HIGH"))
             elif cur.uv_index >= 8:
                 out.append(Insight("☀️", "High UV",
-                                   f"UV index {cur.uv_index:.1f} - use SPF 30+ and sunglasses.",
+                                   f"UV index {cur.uv_index:.1f} — use SPF 30+, a hat and sunglasses.",
                                    "MODERATE"))
             elif cur.uv_index >= 6:
                 out.append(Insight("☀️", "Moderate UV",
-                                   f"UV index {cur.uv_index:.1f} - light sun protection advised.",
+                                   f"UV index {cur.uv_index:.1f} — light sun protection advised.",
                                    "LOW"))
 
         # Visibility
-        if vis_km < 2:
-            out.append(Insight("🌫️", "Very poor visibility",
-                               f"Visibility is only {vis_km:.1f} km - drive with extreme care.",
-                               "HIGH"))
-        elif vis_km < 5:
-            out.append(Insight("🌫️", "Reduced visibility",
-                               f"Visibility is {vis_km:.1f} km - take care on the roads.",
-                               "MODERATE"))
+        if vis_km is not None:
+            if vis_km < 2:
+                out.append(Insight("🌫️", "Very poor visibility",
+                                   f"Visibility is only {vis_km:.1f} km — drive with extreme care.",
+                                   "HIGH"))
+            elif vis_km < 5:
+                out.append(Insight("🌫️", "Reduced visibility",
+                                   f"Visibility is {vis_km:.1f} km — take care on the roads.",
+                                   "MODERATE"))
 
         # Overall outdoor comfort
         if score <= 40:
@@ -586,23 +711,28 @@ class IntelligenceEngine:
                                "The overall comfort score is low. Prefer indoor activities today.",
                                "MODERATE"))
 
-        # Clothing insight (always present, data-driven)
-        out.append(self._clothing_insight(weather))
+        # Clothing insight (data-driven, only when temperature exists)
+        if cur.temperature is not None:
+            out.append(self._clothing_insight(weather))
 
         # Travel insight
-        if vis_km < 5 or cur.precipitation_probability >= 55 or cur.wind_speed >= 50:
+        if (vis_km is not None and vis_km < 5) or (
+            cur.precipitation_probability is not None and cur.precipitation_probability >= 55
+        ) or (cur.wind_speed is not None and cur.wind_speed >= 50):
             out.append(Insight("🧳", "Travel consideration",
                                "Visibility, precipitation or wind may affect long-distance travel.",
                                "LOW"))
 
-        return out[:8]
+        # Prioritize severity, keep the top four (parity with the web UI).
+        out.sort(key=lambda i: self.SEVERITY_RANK[i.level], reverse=True)
+        return out[:4]
 
     @staticmethod
     def _clothing_insight(weather: WeatherData) -> Insight:
         t = weather.current.temperature
         rain = weather.current.precipitation_probability
         if t >= 28:
-            msg = "Light clothing is suitable. Use sun protection when outdoors."
+            msg = "Light clothing is suitable — use sun protection outdoors."
         elif t >= 18:
             msg = "Light-to-medium clothing is comfortable."
         elif t >= 10:
@@ -611,6 +741,6 @@ class IntelligenceEngine:
             msg = "Warm clothing recommended."
         else:
             msg = "Heavy winter clothing is strongly recommended."
-        if rain >= 55:
-            msg += " Rain protection (umbrella/waterproof) would be useful."
-        return Insight("👕", "Clothing insight", msg, "INFO")
+        if rain is not None and rain >= 55:
+            msg += " Rain protection would be useful."
+        return Insight("👕", "Clothing", msg, "INFO")

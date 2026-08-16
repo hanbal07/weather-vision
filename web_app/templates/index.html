@@ -4,123 +4,225 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ app_name }} — {{ app_subtitle }}</title>
-  <meta name="description" content="{{ app_name }} — real-time weather intelligence, explainable weather scoring, activity planning and alerts.">
+  <meta name="description" content="{{ app_name }} — clear, honest weather. Latest available observations and model data with explainable comfort scoring, activity guidance and alerts.">
+  <meta name="theme-color" content="#0b1120">
   <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/weather.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/charts.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="topbar">
     <a class="brand" href="/" aria-label="{{ app_name }} home">
-      <span class="brand-mark">🌤️</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="7" cy="7" r="4" fill="currentColor" stroke="none" opacity="0.9"/>
+          <path d="M17.5 17.5a4.5 4.5 0 0 0 .9-8.9A6.5 6.5 0 0 0 6 8.3"/>
+          <path d="M3 18h13"/>
+        </svg>
+      </span>
       <span class="brand-text">
         <strong>{{ app_name }}</strong>
         <small>{{ app_subtitle }}</small>
       </span>
     </a>
 
-    <form id="search-form" class="search" role="search">
-      <input id="search-input" type="text" placeholder="Search city, country or coordinates (e.g. 31.55, 74.34)"
-             autocomplete="off" required aria-label="Search location">
-      <button type="submit" class="btn btn-primary">Search</button>
-    </form>
+    <div class="search-wrap">
+      <form id="search-form" class="search" role="search" autocomplete="off">
+        <label class="visually-hidden" for="search-input">Search location</label>
+        <input id="search-input" type="text" placeholder="Search a city, country or coordinates"
+               autocomplete="off" spellcheck="false" required aria-label="Search location"
+               aria-autocomplete="list" aria-controls="search-suggestions">
+        <button type="submit" class="btn btn-primary btn-sm">Search</button>
+      </form>
+      <ul id="search-suggestions" class="suggestions" role="listbox" hidden></ul>
+    </div>
 
     <div class="controls">
       <div class="seg" id="unit-toggle" role="group" aria-label="Units">
         <button data-units="metric" class="active" title="Metric units (°C, km/h, hPa)">°C</button>
         <button data-units="imperial" title="Imperial units (°F, mph, inHg)">°F</button>
       </div>
-      <button id="theme-toggle" class="icon-btn" title="Toggle dark / light theme" aria-label="Toggle theme">🌓</button>
+      <button id="theme-toggle" class="icon-btn" title="Toggle light / dark theme" aria-label="Toggle theme">🌓</button>
     </div>
   </header>
 
-  <div id="demo-badge" class="demo-badge" hidden>DEMO DATA — NOT REAL-TIME</div>
-
-  <main class="wrap">
+  <main id="main" class="wrap">
+    <div id="demo-notice" class="notice notice-warn" hidden>⚠️ Demo mode — showing simulated data, not live observations.</div>
     <section id="alerts" class="alerts" hidden></section>
 
-    <!-- Empty / loading / error states -->
-    <section id="state" class="state">
+    <!-- ================= States ================= -->
+    <section id="state" class="state" aria-live="polite">
       <div class="state-box" id="state-empty">
-        <div class="state-icon">🌍</div>
-        <h2>Search any place on Earth</h2>
-        <p>Get the current conditions, a 7-day forecast, an explainable Weather
-           Comfort Score, activity recommendations and live alerts — with the
-           reasoning behind every conclusion.</p>
+        <div class="state-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="m20 20-3.5-3.5"/>
+            <path d="M8 11h6M11 8v6"/>
+          </svg>
+        </div>
+        <h1>Search any place on Earth</h1>
+        <p>Current conditions, a 7-day forecast, an explainable comfort score and
+           honest activity guidance — all derived from the latest available
+           observations and model data.</p>
+        <div class="quick-sample" id="sample-chips"></div>
       </div>
+
       <div class="state-box" id="state-loading" hidden>
-        <div class="spinner" aria-label="Loading"></div>
-        <h2 id="loading-text">Fetching weather data…</h2>
+        <p class="visually-hidden" id="loading-text">Loading weather data…</p>
+        <div class="skeleton hero-skel" aria-hidden="true">
+          <div class="sk sk-line w40"></div>
+          <div class="sk sk-line w25"></div>
+          <div class="sk sk-block"></div>
+        </div>
+        <div class="skeleton grid-skel" aria-hidden="true">
+          <div class="sk sk-block"></div>
+          <div class="sk sk-block"></div>
+          <div class="sk sk-block"></div>
+          <div class="sk sk-block"></div>
+        </div>
       </div>
+
       <div class="state-box" id="state-error" hidden>
-        <div class="state-icon">⚠️</div>
-        <h2 id="error-title">Unable to fetch weather</h2>
-        <p id="error-message">Please try again.</p>
-        <button id="retry-btn" class="btn btn-primary">Retry</button>
+        <div class="state-icon" aria-hidden="true">⚠️</div>
+        <h1 id="error-title">Weather data unavailable</h1>
+        <p id="error-message">We could not reach the weather data source. Please try again.</p>
+        <div class="state-actions">
+          <button id="retry-btn" class="btn btn-primary">Try again</button>
+          <button id="use-cached-btn" class="btn btn-ghost" hidden>Use last available data</button>
+        </div>
       </div>
     </section>
 
+    <!-- ================= Dashboard ================= -->
     <section id="dashboard" hidden>
       <!-- Hero -->
-      <section class="hero card">
+      <section class="hero card" aria-label="Current conditions">
         <div class="hero-left">
           <div class="hero-head">
             <h1 id="loc-name">—</h1>
-            <span id="loc-local-time" class="chip"></span>
+            <span id="favorite-btn" class="fav-pin" role="button" tabindex="0" title="Save to favorites" aria-label="Save to favorites">☆</span>
+          </div>
+          <div class="hero-meta">
+            <span class="chip" id="loc-local-time">—</span>
+            <span class="chip" id="updated-text">—</span>
           </div>
           <div class="hero-temp-row">
-            <span id="hero-icon" class="hero-icon">🌤️</span>
+            <span id="hero-icon" class="hero-icon" aria-hidden="true">—</span>
             <span id="hero-temp" class="hero-temp">—</span>
             <div class="hero-cond">
               <span id="hero-condition">—</span>
               <span id="hero-feels">—</span>
             </div>
           </div>
+          <p id="hero-summary" class="hero-summary">—</p>
+          <dl id="quick-facts" class="quick-facts"></dl>
         </div>
         <div class="hero-right">
-          <button id="favorite-btn" class="icon-btn large" title="Save to favorites" aria-label="Toggle favorite">☆</button>
           <button id="refresh-btn" class="icon-btn large" title="Refresh now" aria-label="Refresh weather">⟳</button>
           <button id="why-btn" class="btn btn-ghost">Why this forecast?</button>
         </div>
       </section>
 
-      <!-- Weather intelligence -->
+      <!-- What matters today -->
+      <section class="card" aria-labelledby="wm-heading">
+        <div class="section-head">
+          <h2 id="wm-heading" class="card-title">What matters today</h2>
+          <p class="card-sub">Prioritised from the current conditions.</p>
+        </div>
+        <div id="insights" class="insight-grid"></div>
+      </section>
+
+      <!-- Comfort score + activity -->
       <section class="grid-2">
-        <article class="card score-card">
-          <h2 class="card-title">Weather Comfort Score</h2>
+        <article class="card score-card" aria-labelledby="score-heading">
+          <h2 id="score-heading" class="card-title">Weather Comfort Score</h2>
           <div class="score-row">
-            <svg id="gauge" viewBox="0 0 120 66" width="150" height="84" aria-hidden="true">
-              <path id="gauge-track" d="M 8 60 A 52 52 0 0 1 112 60" fill="none" stroke="var(--border)" stroke-width="10" stroke-linecap="round"/>
-              <path id="gauge-arc" d="M 8 60 A 52 52 0 0 1 112 60" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round"/>
-            </svg>
-            <div class="score-legend">
+            <div class="gauge" aria-hidden="true">
+              <svg viewBox="0 0 120 66" width="150" height="84">
+                <path d="M 8 60 A 52 52 0 0 1 112 60" fill="none" stroke="var(--border)" stroke-width="10" stroke-linecap="round"/>
+                <path id="gauge-arc" d="M 8 60 A 52 52 0 0 1 112 60" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round"/>
+              </svg>
               <span id="score-total" class="score-total">—</span>
+            </div>
+            <div class="score-legend">
               <span id="score-grade" class="score-grade">—</span>
+              <span id="score-note" class="muted">Explained in “Why this forecast?”</span>
             </div>
           </div>
-          <p id="score-note" class="muted">Hover the factors in “Why this forecast?” for details.</p>
+          <p id="score-factor-note" class="factor-note" hidden></p>
         </article>
 
-        <article class="card">
-          <h2 class="card-title">Today at a glance</h2>
-          <dl class="stats" id="stat-grid"></dl>
+        <article class="card" aria-labelledby="act-heading">
+          <h2 id="act-heading" class="card-title">Activity planner</h2>
+          <div class="verdict">
+            <span id="activity-verdict-icon" class="verdict-icon" aria-hidden="true">🙂</span>
+            <div>
+              <strong id="activity-verdict-text">—</strong>
+              <p id="activity-verdict-detail" class="muted">—</p>
+            </div>
+          </div>
+          <div id="activities" class="activity-grid"></div>
         </article>
       </section>
 
-      <!-- Alerts-free intelligence -->
+      <!-- Hourly -->
+      <section class="card" aria-labelledby="hourly-heading">
+        <div class="section-head">
+          <h2 id="hourly-heading" class="card-title">Hourly forecast</h2>
+          <p class="card-sub">Next 24 hours · tap a row for details.</p>
+        </div>
+        <div id="hourly" class="hourly-strip" role="list"></div>
+        <div id="hourly-detail" class="hourly-detail" hidden></div>
+      </section>
+
+      <!-- Charts -->
+      <section class="card" aria-labelledby="charts-heading">
+        <div class="section-head">
+          <h2 id="charts-heading" class="card-title">Trends</h2>
+          <div class="tabs" id="chart-tabs" role="tablist" aria-label="Chart metric">
+            <button class="tab active" data-tab="temp" role="tab" aria-selected="true">Temperature</button>
+            <button class="tab" data-tab="rain" role="tab" aria-selected="false">Rain</button>
+            <button class="tab" data-tab="wind" role="tab" aria-selected="false">Wind</button>
+          </div>
+        </div>
+        <div class="chart-box"><canvas id="chart-main" aria-label="Forecast chart"></canvas></div>
+      </section>
+
+      <!-- 7 day -->
+      <section class="card" aria-labelledby="daily-heading">
+        <div class="section-head">
+          <h2 id="daily-heading" class="card-title">7-day forecast</h2>
+          <p class="card-sub">Tap a day for more detail.</p>
+        </div>
+        <div id="daily" class="daily-list"></div>
+      </section>
+
+      <!-- Details (expandable) -->
+      <details class="card details" id="details-panel">
+        <summary>
+          <span class="details-title">Details &amp; current conditions</span>
+          <span class="details-hint">Pressure · dew point · wind · visibility · UV</span>
+        </summary>
+        <div class="details-body">
+          <div class="details-grid" id="details-grid"></div>
+        </div>
+      </details>
+
+      <!-- Air quality + sun -->
       <section class="grid-2">
-        <article class="card">
-          <h2 class="card-title">Air quality</h2>
+        <article class="card" aria-labelledby="aq-heading">
+          <h2 id="aq-heading" class="card-title">Air quality</h2>
           <div id="air-quality" class="aq">
-            <div class="aq-value"><span id="aqi-value">—</span><small id="aqi-label">—</small></div>
-            <div id="aqi-details" class="aq-details"></div>
+            <p class="muted">Loading…</p>
           </div>
         </article>
-
-        <article class="card">
-          <h2 class="card-title">Sun &amp; visibility</h2>
+        <article class="card" aria-labelledby="sun-heading">
+          <h2 id="sun-heading" class="card-title">Sun &amp; visibility</h2>
           <div class="sun-row">
             <div class="sun-item">🌅 <span><small>Sunrise</small><b id="sunrise">—</b></span></div>
             <div class="sun-item">🌇 <span><small>Sunset</small><b id="sunset">—</b></span></div>
@@ -129,55 +231,31 @@
         </article>
       </section>
 
-      <!-- Charts -->
-      <section class="card">
-        <h2 class="card-title">Next 24 hours</h2>
-        <div class="charts">
-          <div class="chart-box"><canvas id="chart-temp"></canvas></div>
-          <div class="chart-box"><canvas id="chart-precip"></canvas></div>
-          <div class="chart-box"><canvas id="chart-wind"></canvas></div>
+      <!-- Saved places -->
+      <section class="card" aria-labelledby="saved-heading">
+        <div class="section-head">
+          <h2 id="saved-heading" class="card-title">Saved &amp; recent</h2>
+          <button id="clear-history-btn" class="btn btn-ghost btn-sm" hidden>Clear recent</button>
         </div>
-      </section>
-
-      <!-- Hourly strip -->
-      <section class="card">
-        <h2 class="card-title">Hourly forecast</h2>
-        <div id="hourly" class="hourly-strip"></div>
-      </section>
-
-      <!-- 7 day -->
-      <section class="card">
-        <h2 class="card-title">7-day forecast</h2>
-        <div id="daily" class="daily-grid"></div>
-      </section>
-
-      <!-- Activities -->
-      <section class="card">
-        <h2 class="card-title">Activity planner</h2>
-        <p class="muted">Suitability of common outdoor activities for the current conditions.</p>
-        <div id="activities" class="activity-grid"></div>
-      </section>
-
-      <!-- Insights -->
-      <section class="card">
-        <h2 class="card-title">Weather intelligence</h2>
-        <div id="insights" class="insight-list"></div>
+        <div class="saved-cols">
+          <div>
+            <h3 class="sub-head">⭐ Favorites</h3>
+            <div id="favorites" class="chip-list"><p class="muted">No favorites yet — tap the ☆ on a location to save it here.</p></div>
+          </div>
+          <div>
+            <h3 class="sub-head">🕘 Recent</h3>
+            <div id="history" class="chip-list"><p class="muted">Your recent searches will appear here.</p></div>
+          </div>
+        </div>
       </section>
     </section>
   </main>
 
-  <aside id="side-panel" class="side-panel">
-    <h3>⭐ Favorites</h3>
-    <div id="favorites" class="chip-list"><p class="muted">No favorites yet. Star a location to save it here.</p></div>
-    <h3>🕘 Recent</h3>
-    <div id="history" class="chip-list"><p class="muted">Your recent searches will appear here.</p></div>
-  </aside>
-
   <!-- Why? modal -->
-  <div id="why-modal" class="modal" hidden>
+  <div id="why-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="why-title">
     <div class="modal-box card">
       <div class="modal-head">
-        <h2>Why this forecast?</h2>
+        <h2 id="why-title">Why this forecast?</h2>
         <button id="why-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div id="why-content"></div>
@@ -185,8 +263,9 @@
   </div>
 
   <footer class="footer">
-    <span>{{ app_name }} v{{ version }}</span>
-    <span>Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a></span>
+    <span>{{ app_name }} <span id="footer-version">v{{ version }}</span></span>
+    <span>Weather data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> · latest available observations &amp; model data</span>
+    <span id="footer-updated">—</span>
   </footer>
 
   <script>window.WEATHERVISION = { version: "{{ version }}", demo: {{ 'true' if demo else 'false' }} };</script>

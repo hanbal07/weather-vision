@@ -11,4 +11,4 @@ Modules are organised into clear layers:
     utils/      - unit conversion, validation and formatting helpers
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

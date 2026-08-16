@@ -69,7 +69,7 @@ def test_insights_generate_rain_alert():
 def test_insights_include_clothing_advice():
     weather = make_weather(temp=12)
     titles = [i.title for i in engine.insights(weather)]
-    assert "Clothing insight" in titles
+    assert "Clothing" in titles
 
 
 def test_insights_thunderstorm_critical():

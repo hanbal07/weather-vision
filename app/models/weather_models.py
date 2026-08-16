@@ -104,51 +104,58 @@ class AirQuality:
 @dataclass
 class CurrentWeather:
     temperature: float
-    feels_like: float
+    feels_like: float | None
     condition_code: int
     condition_text: str
     icon: str
     humidity: int
-    wind_speed: float
-    wind_direction: int
-    wind_gusts: float
-    pressure: float
-    visibility_m: float
-    cloud_cover: int
+    wind_speed: float | None
+    wind_direction: int | None
+    wind_gusts: float | None
+    pressure: float | None
+    visibility_m: float | None
+    cloud_cover: int | None
     uv_index: float | None
     is_day: bool
-    precipitation: float
-    precipitation_probability: int
-    sunrise: str
-    sunset: str
+    precipitation: float | None
+    precipitation_probability: int | None
+    dew_point: float | None = None
+    sunrise: str = ""
+    sunset: str = ""
 
 
 @dataclass
 class HourlyForecast:
     time: str
-    temperature: float
-    precipitation_probability: int
-    precipitation: float
+    temperature: float | None
+    precipitation_probability: int | None
+    precipitation: float | None
     condition_code: int
     condition_text: str
     icon: str
-    wind_speed: float
-    is_day: bool
+    wind_speed: float | None
+    is_day: bool = True
+    wind_direction: int | None = None
+    visibility_m: float | None = None
+    dew_point: float | None = None
+    feels_like: float | None = None
 
 
 @dataclass
 class DailyForecast:
     date: str
-    temp_max: float
-    temp_min: float
+    temp_max: float | None
+    temp_min: float | None
     condition_code: int
     condition_text: str
     icon: str
-    precipitation_probability: int
-    precipitation_sum: float
-    uv_index_max: float
-    sunrise: str
-    sunset: str
+    precipitation_probability: int | None
+    precipitation_sum: float | None
+    uv_index_max: float | None
+    sunrise: str = ""
+    sunset: str = ""
+    wind_max: float | None = None
+    feels_like_max: float | None = None
 
 
 @dataclass
@@ -189,7 +196,7 @@ class WeatherData:
             )
 
         is_day = bool(ival(current, "is_day", default=1))
-        code = ival(current, "weather_code", default=0)
+        code = ival(current, "weather_code")
         condition_text, icon = condition_from_code(code, is_day)
 
         tz_name = location.tz_name
@@ -197,25 +204,27 @@ class WeatherData:
         sunrise = cls._first_daily_value(daily, "sunrise")
         sunset = cls._first_daily_value(daily, "sunset")
 
-        precip_prob = cls._current_precipitation_probability(payload)
+        utc_offset = ival(payload, "utc_offset_seconds")
+        precip_prob = cls._current_precipitation_probability(payload, utc_offset)
 
         current_obj = CurrentWeather(
             temperature=temperature,
-            feels_like=fval(current, "apparent_temperature", default=temperature),
+            feels_like=fval(current, "apparent_temperature"),
             condition_code=code or 0,
             condition_text=condition_text,
             icon=icon,
             humidity=humidity,
-            wind_speed=fval(current, "wind_speed_10m", default=0.0),
-            wind_direction=ival(current, "wind_direction_10m", default=0),
-            wind_gusts=fval(current, "wind_gusts_10m", default=0.0),
-            pressure=fval(current, "pressure_msl", default=1013.0),
-            visibility_m=fval(current, "visibility", default=10000.0),
-            cloud_cover=ival(current, "cloud_cover", default=0),
+            wind_speed=fval(current, "wind_speed_10m"),
+            wind_direction=ival(current, "wind_direction_10m"),
+            wind_gusts=fval(current, "wind_gusts_10m"),
+            pressure=fval(current, "pressure_msl"),
+            visibility_m=fval(current, "visibility"),
+            cloud_cover=ival(current, "cloud_cover"),
             uv_index=fval(current, "uv_index"),
             is_day=is_day,
-            precipitation=fval(current, "precipitation", default=0.0),
+            precipitation=fval(current, "precipitation"),
             precipitation_probability=precip_prob,
+            dew_point=fval(current, "dew_point_2m"),
             sunrise=sunrise,
             sunset=sunset,
         )
@@ -243,28 +252,46 @@ class WeatherData:
         return ""
 
     @staticmethod
-    def _current_precipitation_probability(payload: dict[str, Any]) -> int:
-        """Open-Meteo exposes current rain probability inside the hourly arrays."""
+    def _current_precipitation_probability(
+        payload: dict[str, Any], utc_offset: int | None
+    ) -> int | None:
+        """Open-Meteo exposes current rain probability inside the hourly arrays.
+
+        The hourly timestamps are local wall-clock strings, so the match is
+        made against the location's current LOCAL hour computed from the
+        ``utc_offset_seconds`` the API reported for that location.
+        """
         hourly = payload.get("hourly") or {}
         times = hourly.get("time")
         probs = hourly.get("precipitation_probability")
         if not times or not probs or len(times) != len(probs):
-            return 0
-        now_naive = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00")
+            return None
+        offset = int(utc_offset or 0)
+        local_now = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + offset, timezone.utc
+        ).strftime("%Y-%m-%dT%H:00")
         for t, p in zip(times, probs):
-            if str(t).startswith(now_naive[:13]) or str(t) >= now_naive[:13]:
-                return int(p or 0)
-        return int(probs[0] or 0) if probs else 0
+            if str(t)[:13] == local_now[:13]:
+                return int(p) if p is not None else None
+        # Hour boundary rolled over mid-request: use the next upcoming hour.
+        for t, p in zip(times, probs):
+            if str(t)[:13] >= local_now[:13]:
+                return int(p) if p is not None else None
+        return int(probs[0]) if probs[0] is not None else None
 
     @staticmethod
     def _parse_hourly(payload: dict[str, Any], tz_name: str) -> list[HourlyForecast]:
         hourly = payload.get("hourly") or {}
         times = hourly.get("time") or []
         temps = hourly.get("temperature_2m") or []
+        feels = hourly.get("apparent_temperature") or []
         probs = hourly.get("precipitation_probability") or []
         precips = hourly.get("precipitation") or []
         codes = hourly.get("weather_code") or []
         winds = hourly.get("wind_speed_10m") or []
+        wind_dirs = hourly.get("wind_direction_10m") or []
+        vis = hourly.get("visibility") or []
+        dews = hourly.get("dew_point_2m") or []
         is_days = hourly.get("is_day") or []
         if not times:
             return []
@@ -275,23 +302,27 @@ class WeatherData:
             dt = parse_iso_time(raw_time, tz_name)
             if dt is not None and dt < now_naive:
                 continue
-            code = ival({"v": codes[idx]}, "v", default=0) if idx < len(codes) else 0
+            code = ival({"v": codes[idx]}, "v") if idx < len(codes) else None
             is_day = bool(ival({"v": is_days[idx]}, "v", default=1)) if idx < len(is_days) else True
             text, icon = condition_from_code(code, is_day)
             result.append(
                 HourlyForecast(
                     time=str(raw_time),
-                    temperature=fval({"v": temps[idx]}, "v", default=0.0),
-                    precipitation_probability=ival({"v": probs[idx]}, "v", default=0)
-                    if idx < len(probs) else 0,
-                    precipitation=fval({"v": precips[idx]}, "v", default=0.0)
-                    if idx < len(precips) else 0.0,
-                    condition_code=code,
+                    temperature=fval({"v": temps[idx]}, "v") if idx < len(temps) else None,
+                    precipitation_probability=ival({"v": probs[idx]}, "v")
+                    if idx < len(probs) else None,
+                    precipitation=fval({"v": precips[idx]}, "v")
+                    if idx < len(precips) else None,
+                    condition_code=code or 0,
                     condition_text=text,
                     icon=icon,
-                    wind_speed=fval({"v": winds[idx]}, "v", default=0.0)
-                    if idx < len(winds) else 0.0,
+                    wind_speed=fval({"v": winds[idx]}, "v") if idx < len(winds) else None,
                     is_day=is_day,
+                    wind_direction=ival({"v": wind_dirs[idx]}, "v")
+                    if idx < len(wind_dirs) else None,
+                    visibility_m=fval({"v": vis[idx]}, "v") if idx < len(vis) else None,
+                    dew_point=fval({"v": dews[idx]}, "v") if idx < len(dews) else None,
+                    feels_like=fval({"v": feels[idx]}, "v") if idx < len(feels) else None,
                 )
             )
             if len(result) >= 24:
@@ -306,31 +337,39 @@ class WeatherData:
             return []
         result: list[DailyForecast] = []
         for idx, raw_date in enumerate(dates):
-            code = ival({"v": daily.get("weather_code", [])[idx]}, "v", default=0) \
-                if idx < len(daily.get("weather_code") or []) else 0
+            code = ival({"v": daily.get("weather_code", [])[idx]}, "v") \
+                if idx < len(daily.get("weather_code") or []) else None
             text, icon = condition_from_code(code, True)
             result.append(
                 DailyForecast(
                     date=str(raw_date),
-                    temp_max=fval({"v": (daily.get("temperature_2m_max") or [])[idx]}, "v", default=0.0),
-                    temp_min=fval({"v": (daily.get("temperature_2m_min") or [])[idx]}, "v", default=0.0),
-                    condition_code=code,
+                    temp_max=fval({"v": (daily.get("temperature_2m_max") or [])[idx]}, "v")
+                    if idx < len(daily.get("temperature_2m_max") or []) else None,
+                    temp_min=fval({"v": (daily.get("temperature_2m_min") or [])[idx]}, "v")
+                    if idx < len(daily.get("temperature_2m_min") or []) else None,
+                    condition_code=code or 0,
                     condition_text=text,
                     icon=icon,
                     precipitation_probability=ival(
                         {"v": (daily.get("precipitation_probability_max") or [])[idx]},
-                        "v", default=0,
-                    ) if idx < len(daily.get("precipitation_probability_max") or []) else 0,
+                        "v",
+                    ) if idx < len(daily.get("precipitation_probability_max") or []) else None,
                     precipitation_sum=fval(
-                        {"v": (daily.get("precipitation_sum") or [])[idx]}, "v", default=0.0,
-                    ) if idx < len(daily.get("precipitation_sum") or []) else 0.0,
+                        {"v": (daily.get("precipitation_sum") or [])[idx]}, "v",
+                    ) if idx < len(daily.get("precipitation_sum") or []) else None,
                     uv_index_max=fval(
-                        {"v": (daily.get("uv_index_max") or [])[idx]}, "v", default=0.0,
-                    ) if idx < len(daily.get("uv_index_max") or []) else 0.0,
+                        {"v": (daily.get("uv_index_max") or [])[idx]}, "v",
+                    ) if idx < len(daily.get("uv_index_max") or []) else None,
                     sunrise=sval({"v": (daily.get("sunrise") or [])[idx]}, "v")
                     if idx < len(daily.get("sunrise") or []) else "",
                     sunset=sval({"v": (daily.get("sunset") or [])[idx]}, "v")
                     if idx < len(daily.get("sunset") or []) else "",
+                    wind_max=fval(
+                        {"v": (daily.get("wind_speed_10m_max") or [])[idx]}, "v",
+                    ) if idx < len(daily.get("wind_speed_10m_max") or []) else None,
+                    feels_like_max=fval(
+                        {"v": (daily.get("apparent_temperature_max") or [])[idx]}, "v",
+                    ) if idx < len(daily.get("apparent_temperature_max") or []) else None,
                 )
             )
         return result

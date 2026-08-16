@@ -224,10 +224,11 @@ def create_app() -> Flask:
             pressure_unit=units[2],
             is_favorite=is_favorite,
             score=score,
-            why_lines=intelligence.why(weather),
+            why_lines=intelligence.why_structured(weather),
             activities=intelligence.activity_scores(weather),
             insights=intelligence.insights(weather),
             alerts=alerts.evaluate(weather, score.total),
+            summary=intelligence.summary(weather),
         )
 
     def _api_error(exc: WeatherAPIError) -> tuple[dict[str, Any], int]:

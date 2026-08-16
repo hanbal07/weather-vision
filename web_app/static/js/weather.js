@@ -1106,77 +1106,164 @@ const WV = (() => {
   }
 
   // --------------------------------------------------------------------
-  // Open-Meteo orchestration
+  // Flask API layer (web_app variant).
+  //
+  // The server performs geocoding, forecasting and SQLite favorites/history;
+  // this layer preserves the exact same payload contract and public API as the
+  // static GitHub-Pages build, so app.js / charts.js are shared verbatim.
   // --------------------------------------------------------------------
-  async function fetchForecast(location) {
-    const url = `${FORECAST_URL}?latitude=${location.latitude}&longitude=${location.longitude}` +
-      `&timezone=auto&current=${CURRENT_FIELDS}&hourly=${HOURLY_FIELDS}&daily=${DAILY_FIELDS}` +
-      `&forecast_days=${FORECAST_DAYS}`;
-    const data = await fetchJSON(url);
-    if (!data || !data.current) {
-      throw new Error("The weather service returned unexpected data. Please try again.");
+  const API_WEATHER = "/api/weather";
+  const API_SEARCH = "/api/search";
+  const API_FAVORITES = "/api/favorites";
+  const API_HISTORY = "/api/history";
+
+  const keyOf = (loc) => `${loc.latitude},${loc.longitude}`;
+
+  async function fetchAPI(url, options) {
+    let res;
+    try {
+      res = await fetch(url, options);
+    } catch (_e) {
+      throw new Error("Cannot reach the weather server. Please check your internet connection and try again.");
+    }
+    let data = {};
+    try { data = await res.json(); } catch (_e) { /* fallthrough */ }
+    if (!res.ok) {
+      throw new Error((data && data.error) || "The weather service returned unexpected data. Please try again.");
     }
     return data;
   }
 
-  async function fetchAirQuality(location) {
+  // Rebuild the "raw metric snapshot" shape consumed by serializePayload() so
+  // client-side unit switches work exactly like on the static site.
+  function rawFromPayload(p) {
+    const cur = p.current || {};
+    const loc = p.location || {};
+    const arr = (v) => Array.isArray(v) ? v : [];
+    return {
+      location: {
+        name: loc.name, country: loc.country, country_code: loc.country_code,
+        admin1: loc.admin1, latitude: loc.latitude, longitude: loc.longitude,
+        timezone: loc.timezone, population: loc.population,
+        display_name: loc.display_name,
+        utc_offset_seconds: loc.utc_offset_seconds,
+      },
+      current: {
+        temperature: cur.temperature,
+        feels_like: cur.feels_like,
+        condition_code: null,
+        condition_text: cur.condition,
+        icon: cur.icon,
+        humidity: cur.humidity,
+        wind_speed: cur.wind,
+        wind_direction: cur.wind_direction_deg,
+        wind_gusts: cur.wind_gusts,
+        pressure: cur.pressure,
+        visibility_m: cur.visibility,
+        cloud_cover: cur.cloud_cover,
+        uv_index: cur.uv,
+        is_day: cur.is_day,
+        precipitation: cur.precipitation,
+        precipitation_probability: cur.precipitation_probability,
+        precipitation_period_label: cur.precipitation_period_label || "",
+        dew_point: cur.dew_point,
+        sunrise: cur.sunrise || "",
+        sunset: cur.sunset || "",
+      },
+      hourly: arr(p.hourly).map((h) => ({
+        time: h.iso || "",
+        temperature: h.temperature,
+        feels_like: h.feels_like,
+        precipitation_probability: h.precip_prob,
+        precipitation: h.precipitation,
+        condition_text: h.condition,
+        icon: h.icon,
+        wind_speed: h.wind,
+        wind_direction: h.wind_direction_deg,
+        visibility_m: h.visibility,
+        is_day: h.is_day,
+        is_now: Boolean(h.is_now),
+      })),
+      daily: arr(p.daily).map((d) => ({
+        date: d.iso || "",
+        temp_max: d.high,
+        temp_min: d.low,
+        feels_like_max: d.feels_like_max,
+        condition_text: d.condition,
+        icon: d.icon,
+        precipitation_probability: d.precip_prob,
+        precipitation_sum: d.precipitation_sum,
+        uv_index_max: d.uv,
+        wind_max: d.wind_max,
+        sunrise: d.sunrise || "",
+        sunset: d.sunset || "",
+      })),
+      air_quality: p.air_quality
+        ? { aqi: p.air_quality.aqi, pm2_5: p.air_quality.pm25, pm10: p.air_quality.pm10 }
+        : null,
+      fetched_at: (p.meta && p.meta.fetched_at) || new Date().toISOString(),
+      source: (p.meta && p.meta.source) || "live",
+      utc_offset_seconds: loc.utc_offset_seconds,
+    };
+  }
+
+  // --------------------------------------------------------------------
+  // Favorites / history (server-backed, mirrored locally for instant UI)
+  // --------------------------------------------------------------------
+  let favCache = [];
+  let histCache = [];
+
+  function favorites() { return favCache; }
+  function isFavorite(loc) { return favCache.some((f) => keyOf(f) === keyOf(loc)); }
+  function history() { return histCache; }
+
+  async function refreshFavorites() {
     try {
-      const url = `${AIR_QUALITY_URL}?latitude=${location.latitude}&longitude=${location.longitude}` +
-        `&current=us_aqi,pm2_5,pm10`;
-      return await fetchJSON(url);
-    } catch (_e) {
-      return null;
-    }
+      const data = await fetchAPI(API_FAVORITES);
+      favCache = (data && data.favorites) || [];
+    } catch (_e) { favCache = []; }
+  }
+  async function refreshHistory() {
+    try {
+      const data = await fetchAPI(API_HISTORY);
+      histCache = (data && data.history) || [];
+    } catch (_e) { histCache = []; }
   }
 
-  // --------------------------------------------------------------------
-  // localStorage persistence (mirror SQLite favorites/history) + caching
-  // --------------------------------------------------------------------
-  const keyOf = (loc) => `${loc.latitude},${loc.longitude}`;
-
-  function readList(name) {
-    try { return JSON.parse(localStorage.getItem(name)) || []; } catch (_e) { return []; }
-  }
-  function writeList(name, list) {
-    try { localStorage.setItem(name, JSON.stringify(list)); } catch (_e) { /* storage unavailable */ }
-  }
-
-  function favoritesList() { return readList("wv-favorites"); }
-  function isFavorite(loc) {
-    return favoritesList().some((f) => keyOf(f) === keyOf(loc));
-  }
   function toggleFavorite(loc) {
-    const list = favoritesList();
-    const existing = list.findIndex((f) => keyOf(f) === keyOf(loc));
-    if (existing >= 0) { list.splice(existing, 1); writeList("wv-favorites", list); return { removed: true }; }
-    list.unshift({
+    const existing = favCache.findIndex((f) => keyOf(f) === keyOf(loc));
+    if (existing >= 0) {
+      favCache.splice(existing, 1);
+      fetch(API_FAVORITES, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ latitude: loc.latitude, longitude: loc.longitude }),
+      }).catch(() => {});
+      return { removed: true };
+    }
+    favCache.unshift({
       name: loc.name || "Unknown", country: loc.country || "", country_code: loc.country_code || "",
       admin1: loc.admin1 || "", latitude: loc.latitude, longitude: loc.longitude,
       timezone: loc.timezone || "UTC",
       display_name: loc.display_name || loc.name || "Unknown location",
     });
-    writeList("wv-favorites", list);
+    fetch(API_FAVORITES, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(favCache[0]),
+    }).catch(() => {});
     return { added: true };
   }
-  function historyList() {
-    return readList("wv-history").map((e) => ({ location: e.location, searched_at: e.searched_at }));
-  }
-  function recordHistory(loc) {
-    const list = readList("wv-history").filter((e) => keyOf(e.location) !== keyOf(loc));
-    list.unshift({ location: loc, searched_at: new Date().toISOString() });
-    writeList("wv-history", list.slice(0, HISTORY_LIMIT));
-  }
-  function clearHistory() { writeList("wv-history", []); }
 
-  function cacheGet(key) {
-    try {
-      const entry = JSON.parse(localStorage.getItem("wv-cache-" + key) || "null");
-      if (entry && entry.raw && Date.now() - entry.at < CACHE_TTL_MS) return entry.raw;
-    } catch (_e) { /* ignore */ }
-    return null;
+  function recordHistory(loc) {
+    histCache = histCache.filter((e) => keyOf(e.location) !== keyOf(loc));
+    histCache.unshift({ location: loc, searched_at: new Date().toISOString() });
+    histCache = histCache.slice(0, HISTORY_LIMIT);
   }
-  function cacheSet(key, raw) {
-    try { localStorage.setItem("wv-cache-" + key, JSON.stringify({ at: Date.now(), raw })); } catch (_e) { /* ignore */ }
+
+  function clearHistory() {
+    histCache = [];
+    fetch(API_HISTORY, { method: "DELETE" }).catch(() => {});
   }
 
   // --------------------------------------------------------------------
@@ -1187,37 +1274,16 @@ const WV = (() => {
     imperial: ["F", "mph", "inHg"],
   };
 
-  function displayNameOf(location) {
-    return [location.name, location.admin1, location.country].filter(Boolean).join(", ") || "Unknown location";
-  }
-
   async function weather(query, units) {
     const unitSet = UNITS[units] || UNITS.metric;
     const q = String(query || "").trim();
     if (!q) throw new Error("Please enter a location name");
 
-    const locations = await geocode(q);
-    if (!locations.length) {
-      throw new Error("We couldn't find that location. Check the spelling or try a nearby city name.");
-    }
-    const location = locations[0];
-    const displayName = displayNameOf(location);
-
-    let raw = cacheGet(keyOf(location));
-    let source = "cache";
-    if (!raw) {
-      const payload = await fetchForecast(location);
-      const airPayload = await fetchAirQuality(location);
-      raw = parseForecast(payload, { ...location, display_name: displayName }, airPayload);
-      raw.source = "live";
-      cacheSet(keyOf(location), raw);
-    } else {
-      raw = { ...raw, source: "cache", location: { ...raw.location, display_name: displayName } };
-    }
-
-    recordHistory({ ...location, display_name: displayName });
-    const payload = serializePayload(raw, unitSet, isFavorite(location));
+    const data = await fetchAPI(`${API_WEATHER}?q=${encodeURIComponent(q)}&units=metric`);
+    const raw = rawFromPayload(data);
+    const payload = serializePayload(raw, unitSet, Boolean(data.meta && data.meta.is_favorite));
     payload._raw = raw;
+    recordHistory(raw.location);
     return payload;
   }
 
@@ -1231,7 +1297,8 @@ const WV = (() => {
   async function suggest(query) {
     const q = String(query || "").trim();
     if (!q) return [];
-    return geocode(q, 6);
+    const data = await fetchAPI(`${API_SEARCH}?q=${encodeURIComponent(q)}`);
+    return (data && data.locations) || [];
   }
 
   function lastPayload() {
@@ -1250,13 +1317,17 @@ const WV = (() => {
     } catch (_e) { /* ignore */ }
   }
 
+  // Preload server-side favorites/history for the initial render.
+  refreshFavorites();
+  refreshHistory();
+
   return {
     weather,
     serializePayload: serializePayloadPublic,
     suggest,
-    favorites: favoritesList,
+    favorites,
     toggleFavorite,
-    history: historyList,
+    history,
     clearHistory,
     lastPayload,
     saveLastPayload,

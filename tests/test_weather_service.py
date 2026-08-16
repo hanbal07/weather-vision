@@ -43,7 +43,8 @@ def test_parse_missing_optional_fields_does_not_crash():
     del payload["current"]["uv_index"]
     weather = WeatherData.from_api_json(payload, make_location())
     assert weather.current.uv_index is None
-    assert weather.current.visibility_m == 10000.0  # safe default
+    # Never invent values: a missing visibility stays None, not a fake 10 km.
+    assert weather.current.visibility_m is None
 
 
 def test_parse_air_quality_missing_returns_none():

@@ -40,18 +40,19 @@ class AlertEngine:
         """Return alerts derived from the current conditions and today's forecast."""
         cur = weather.current
         alerts: list[WeatherAlert] = []
-        vis_km = cur.visibility_m / 1000.0
+        vis_km = cur.visibility_m / 1000.0 if cur.visibility_m is not None else None
 
         # --- Heavy rain ----------------------------------------------------
-        if cur.condition_code in RAIN_CODES and cur.precipitation >= self.HEAVY_RAIN_MM:
+        if (cur.condition_code in RAIN_CODES and cur.precipitation is not None
+                and cur.precipitation >= self.HEAVY_RAIN_MM):
             alerts.append(WeatherAlert(
                 "HIGH", "🌧️", "Heavy rain",
                 f"Rainfall rate is {cur.precipitation:.1f} mm/h. Seek shelter and take care on the roads.",
             ))
-        elif cur.precipitation_probability >= 85:
+        elif cur.precipitation_probability is not None and cur.precipitation_probability >= 85:
             alerts.append(WeatherAlert(
                 "MODERATE", "🌧️", "High rain probability",
-                f"There is a {cur.precipitation_probability}% chance of rain soon.",
+                f"There is a {cur.precipitation_probability}% chance of rain over the next hour.",
             ))
 
         # --- Thunderstorm --------------------------------------------------
@@ -82,24 +83,26 @@ class AlertEngine:
             ))
 
         # --- Strong wind --------------------------------------------------------
-        if cur.wind_speed >= self.STRONG_WIND_KMH:
+        if cur.wind_speed is not None and cur.wind_speed >= self.STRONG_WIND_KMH:
+            gusts = f" (gusts to {cur.wind_gusts:.0f} km/h)" if cur.wind_gusts is not None else ""
             alerts.append(WeatherAlert(
                 "HIGH" if cur.wind_speed >= 60 else "MODERATE",
                 "🌬️", "Strong wind",
-                f"Wind speed is {cur.wind_speed:.0f} km/h (gusts to {cur.wind_gusts:.0f} km/h).",
+                f"Wind speed is {cur.wind_speed:.0f} km/h{gusts}.",
             ))
 
         # --- Poor visibility ----------------------------------------------------
-        if vis_km < self.VERY_POOR_VISIBILITY_KM:
-            alerts.append(WeatherAlert(
-                "HIGH", "🌫️", "Very poor visibility",
-                f"Visibility is only {vis_km:.1f} km. Travel with extreme caution.",
-            ))
-        elif vis_km < self.POOR_VISIBILITY_KM:
-            alerts.append(WeatherAlert(
-                "MODERATE", "🌫️", "Reduced visibility",
-                f"Visibility is {vis_km:.1f} km. Allow extra distance on the road.",
-            ))
+        if vis_km is not None:
+            if vis_km < self.VERY_POOR_VISIBILITY_KM:
+                alerts.append(WeatherAlert(
+                    "HIGH", "🌫️", "Very poor visibility",
+                    f"Visibility is only {vis_km:.1f} km. Travel with extreme caution.",
+                ))
+            elif vis_km < self.POOR_VISIBILITY_KM:
+                alerts.append(WeatherAlert(
+                    "MODERATE", "🌫️", "Reduced visibility",
+                    f"Visibility is {vis_km:.1f} km. Allow extra distance on the road.",
+                ))
 
         # --- Poor overall comfort ------------------------------------------------
         if comfort_score <= 25:
@@ -116,7 +119,8 @@ class AlertEngine:
         # --- Tomorrow's heavy rain (advance notice) -------------------------------
         if len(weather.daily) >= 2:
             tomorrow = weather.daily[1]
-            if tomorrow.precipitation_probability >= 75:
+            if (tomorrow.precipitation_probability is not None
+                    and tomorrow.precipitation_probability >= 75):
                 alerts.append(WeatherAlert(
                     "LOW", "🗓️", "Rain expected tomorrow",
                     f"There is a {tomorrow.precipitation_probability}% chance of rain tomorrow "

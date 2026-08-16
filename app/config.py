@@ -37,7 +37,7 @@ ENV_THEME: str = os.getenv("APP_THEME", "dark").strip().lower()
 # ---------------------------------------------------------------------------
 APP_NAME = "WeatherVision"
 APP_SUBTITLE = "Real-Time Weather Intelligence"
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 ORGANIZATION = "WeatherVision Project"
 
 # ---------------------------------------------------------------------------

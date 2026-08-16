@@ -28,6 +28,7 @@ def make_weather(
     rain_prob: int = 5,
     precipitation: float = 0.0,
     wind_direction: int = 200,
+    dew_point: float | None = 12.0,
     tz: str = "Asia/Karachi",
     source: str = "live",
 ) -> WeatherData:
@@ -48,7 +49,7 @@ def make_weather(
         humidity=humidity,
         wind_speed=wind,
         wind_direction=wind_direction,
-        wind_gusts=wind + 8.0,
+        wind_gusts=(wind + 8.0) if wind is not None else None,
         pressure=pressure,
         visibility_m=visibility_m,
         cloud_cover=cloud,
@@ -56,6 +57,7 @@ def make_weather(
         is_day=is_day,
         precipitation=precipitation,
         precipitation_probability=rain_prob,
+        dew_point=dew_point,
         sunrise="2026-08-16T06:10",
         sunset="2026-08-16T18:50",
     )

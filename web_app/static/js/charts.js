@@ -1,10 +1,10 @@
-/* WeatherVision — Chart.js wrappers (theme-aware). */
+/* WeatherVision — Chart.js wrappers (v2): a single theme-aware chart whose
+ * metric is controlled by the tabbed UI in app.js. Units follow the payload.
+ */
 "use strict";
 
 const WeatherCharts = (() => {
-  let tempChart = null;
-  let precipChart = null;
-  let windChart = null;
+  let chart = null;
 
   function cssVar(name) {
     return getComputedStyle(document.documentElement)
@@ -20,115 +20,109 @@ const WeatherCharts = (() => {
     return g;
   }
 
-  function font() {
-    return "'Segoe UI', system-ui, sans-serif";
+  function destroy() {
+    if (chart) { chart.destroy(); chart = null; }
   }
 
-  function destroyAll() {
-    [tempChart, precipChart, windChart].forEach((c) => c && c.destroy());
-    tempChart = precipChart = windChart = null;
+  function baseOptions(labels, text, border) {
+    const font = (size = 10) => ({ family: "'Segoe UI', system-ui, sans-serif", size });
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: cssVar("--tooltip-bg"),
+          titleColor: cssVar("--text"),
+          bodyColor: cssVar("--text-soft"),
+          borderColor: border,
+          borderWidth: 1,
+          cornerRadius: 8,
+          displayColors: false,
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: text, font: font(10), maxTicksLimit: 8, maxRotation: 0 },
+        },
+        y: {
+          grid: { color: border, tickColor: border },
+          ticks: { color: text, font: font(10) },
+        },
+      },
+    };
   }
 
-  function render(hourly, units) {
-    destroyAll();
+  function render(hourly, units, tab) {
+    destroy();
     if (!hourly || !hourly.length) return;
 
     const labels = hourly.map((h) => h.time);
     const text = cssVar("--text-soft");
     const border = cssVar("--border");
     const accent = cssVar("--accent");
-    const ok = "#22c55e";
-    const warn = "#f59e0b";
-    const skye = "rgba(56, 189, 248, 0.85)";
+    const tempColor = "#f59e0b";
+    const rainColor = "rgba(56, 189, 248, 0.85)";
+    const windColor = "#22c55e";
+    const tabName = tab || "temp";
+    const tempSuffix = units && units.temp === "F" ? "°F" : "°C";
+    const windSuffix = units && units.wind === "mph" ? " mph" : " km/h";
 
-    const gridOpts = {
-      color: border,
-      font: { family: font(), size: 10 },
-      tickColor: border,
-    };
-    const base = {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-    };
+    let type = "line";
+    let datasets = [];
+    let yTicks = null;
 
-    // Temperature ----------------------------------------------------
-    tempChart = new Chart(document.getElementById("chart-temp"), {
-      type: "line",
-      data: {
-        labels,
-        datasets: [{
-          label: "Temperature",
-          data: hourly.map((h) => h.temperature),
-          borderColor: accent,
-          borderWidth: 2,
-          tension: 0.35,
-          pointRadius: 2,
-          pointHoverRadius: 5,
-          pointBackgroundColor: accent,
-          fill: true,
-          backgroundColor: (ctx) => gradient(ctx, "rgba(56,189,248,0.35)", "rgba(56,189,248,0.02)"),
-        }],
-      },
-      options: {
-        ...base,
-        interaction: { mode: "index", intersect: false },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: text, font: { family: font(), size: 10 }, maxTicksLimit: 8 } },
-          y: { grid: gridOpts, ticks: { color: text, font: { family: font(), size: 10 }, callback: (v) => `${v}°` } },
-        },
-      },
+    if (tabName === "temp") {
+      datasets = [{
+        label: "Temperature",
+        data: hourly.map((h) => h.temperature),
+        borderColor: tempColor,
+        backgroundColor: (ctx) => gradient(ctx, "rgba(245,158,11,0.30)", "rgba(245,158,11,0.02)"),
+        borderWidth: 2,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointBackgroundColor: tempColor,
+        fill: true,
+      }];
+      yTicks = (v) => `${v}${tempSuffix}`;
+    } else if (tabName === "rain") {
+      type = "bar";
+      datasets = [{
+        label: "Rain probability",
+        data: hourly.map((h) => h.precip_prob),
+        backgroundColor: (ctx) => gradient(ctx, rainColor, "rgba(56,189,248,0.15)"),
+        borderRadius: 4,
+      }];
+      yTicks = (v) => `${v}%`;
+    } else {
+      datasets = [{
+        label: "Wind speed",
+        data: hourly.map((h) => h.wind),
+        borderColor: windColor,
+        backgroundColor: (ctx) => gradient(ctx, "rgba(34,197,94,0.25)", "rgba(34,197,94,0.02)"),
+        borderWidth: 2,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointBackgroundColor: windColor,
+        fill: true,
+      }];
+      yTicks = (v) => `${v}${windSuffix}`;
+    }
+
+    const options = baseOptions(labels, text, border);
+    if (yTicks) options.scales.y.ticks.callback = yTicks;
+    if (tabName === "rain") options.scales.y.suggestedMax = 100;
+
+    chart = new Chart(document.getElementById("chart-main"), {
+      type,
+      data: { labels, datasets },
+      options,
     });
 
-    // Precipitation ----------------------------------------------------
-    precipChart = new Chart(document.getElementById("chart-precip"), {
-      type: "bar",
-      data: {
-        labels,
-        datasets: [{
-          label: "Rain probability",
-          data: hourly.map((h) => h.precip_prob),
-          backgroundColor: (ctx) => gradient(ctx, skye, "rgba(56,189,248,0.15)"),
-          borderRadius: 4,
-        }],
-      },
-      options: {
-        ...base,
-        interaction: { mode: "index", intersect: false },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: text, font: { family: font(), size: 10 }, maxTicksLimit: 8 } },
-          y: { grid: gridOpts, ticks: { color: text, font: { family: font(), size: 10 }, callback: (v) => `${v}%`, suggestedMax: 100 } },
-        },
-      },
-    });
-
-    // Wind --------------------------------------------------------------
-    windChart = new Chart(document.getElementById("chart-wind"), {
-      type: "line",
-      data: {
-        labels,
-        datasets: [{
-          label: "Wind speed",
-          data: hourly.map((h) => h.wind),
-          borderColor: ok,
-          borderWidth: 2,
-          tension: 0.35,
-          pointRadius: 2,
-          pointHoverRadius: 5,
-          pointBackgroundColor: ok,
-        }],
-      },
-      options: {
-        ...base,
-        interaction: { mode: "index", intersect: false },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: text, font: { family: font(), size: 10 }, maxTicksLimit: 8 } },
-          y: { grid: gridOpts, ticks: { color: text, font: { family: font(), size: 10 } } },
-        },
-      },
-    });
-
-    // Keep charts in sync with the theme after re-renders.
     document.documentElement.setAttribute("data-charts-ready", "true");
   }
 
