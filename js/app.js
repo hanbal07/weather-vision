@@ -9,9 +9,20 @@
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
+  const storage = (() => {
+    try {
+      localStorage.setItem("__wv__", "1");
+      localStorage.removeItem("__wv__");
+      return { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) };
+    } catch (_e) {
+      const mem = {};
+      return { get: (k) => mem[k] ?? null, set: (k, v) => { mem[k] = String(v); } };
+    }
+  })();
+
   const state = {
     query: "",
-    units: localStorage.getItem("wv-units") || "metric",
+    units: storage.get("wv-units") || "metric",
     current: null,          // last weather payload
     loading: false,
   };
@@ -21,10 +32,10 @@
   // ------------------------------------------------------------------
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("wv-theme", theme);
+    storage.set("wv-theme", theme);
   }
   function currentTheme() {
-    return localStorage.getItem("wv-theme")
+    return storage.get("wv-theme")
       || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
   }
 
@@ -33,7 +44,7 @@
   // ------------------------------------------------------------------
   function setUnits(units) {
     state.units = units;
-    localStorage.setItem("wv-units", units);
+    storage.set("wv-units", units);
     document.querySelectorAll("#unit-toggle button").forEach((b) => {
       b.classList.toggle("active", b.dataset.units === units);
     });
@@ -111,7 +122,9 @@
     renderInsights(data);
     renderAlerts(data);
 
-    if (window.WeatherCharts) WeatherCharts.render(data.hourly, data.units);
+    if (window.WeatherCharts) {
+      try { WeatherCharts.render(data.hourly, data.units); } catch (_e) { /* charts are non-critical */ }
+    }
   }
 
   function renderStats(data) {
@@ -306,7 +319,9 @@
 
     $("theme-toggle").addEventListener("click", () => {
       applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-      if (state.current && window.WeatherCharts) window.WeatherCharts.render(state.current.hourly, state.units);
+      if (state.current && window.WeatherCharts) {
+        try { window.WeatherCharts.render(state.current.hourly, state.units); } catch (_e) { /* non-critical */ }
+      }
     });
 
     document.querySelectorAll("#unit-toggle button").forEach((b) =>
