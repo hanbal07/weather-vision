@@ -134,3 +134,4 @@ const WeatherCharts = (() => {
 
   return { render };
 })();
+window.WeatherCharts = WeatherCharts;
