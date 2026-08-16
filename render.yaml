@@ -1,0 +1,15 @@
+# Render.com blueprint — WeatherVision (free tier)
+services:
+  - type: web
+    name: weather-vision
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 30
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DEMO_MODE
+        value: "0"

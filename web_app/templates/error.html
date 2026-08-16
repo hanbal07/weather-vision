@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — WeatherVision</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <main class="wrap">
+    <section class="state">
+      <div class="state-box">
+        <div class="state-icon">😕</div>
+        <h2>{{ title }}</h2>
+        <p>{{ message }}</p>
+        <a class="btn btn-primary" href="/">Back to dashboard</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
